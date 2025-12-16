@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <base target="_top">
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background-color: #f8f9fa; color: #202124; }
+    h2 { margin-top: 0; margin-bottom: 20px; font-size: 18px; font-weight: 500; color: #202124; }
+
+    .form-group { margin-bottom: 16px; }
+    label { display: block; margin-bottom: 6px; font-weight: 500; color: #5f6368; font-size: 13px; }
+
+    select, input, textarea {
+      width: 100%; padding: 10px 12px;
+      border: 1px solid #dadce0; border-radius: 4px;
+      font-size: 14px; color: #3c4043;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    select:focus, input:focus { outline: none; border-color: #4285f4; box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2); }
+    input:invalid { border-color: #ea4335; }
+    .form-hint { font-size: 11px; color: #80868b; margin-top: 4px; }
+
+    .button-group { margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px; }
+    button {
+      padding: 10px 20px; cursor: pointer;
+      background-color: #1a73e8; color: white;
+      border: none; border-radius: 4px;
+      font-size: 14px; font-weight: 500;
+      transition: background-color 0.2s;
+    }
+    button:hover { background-color: #1765cc; box-shadow: 0 1px 2px rgba(60,64,67,0.3); }
+    button:disabled { background-color: #dadce0; color: #80868b; cursor: not-allowed; box-shadow: none; }
+    button.secondary { background-color: #fff; color: #5f6368; border: 1px solid #dadce0; }
+    button.secondary:hover { background-color: #f1f3f4; border-color: #dadce0; color: #202124; box-shadow: none; }
+    button.danger { background-color: #ea4335; }
+    button.danger:hover { background-color: #d33828; }
+
+    .progress-container { margin-top: 24px; display: none; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); border: 1px solid #e8eaed; }
+    .progress-bar { height: 8px; background-color: #e8eaed; border-radius: 4px; overflow: hidden; }
+    .progress-fill { height: 100%; background-color: #1a73e8; width: 0%; transition: width 0.3s ease; border-radius: 4px; }
+    .progress-fill.complete { background-color: #34a853; }
+    .progress-fill.error { background-color: #ea4335; }
+
+    .progress-text { text-align: center; margin-top: 12px; font-size: 13px; color: #5f6368; font-weight: 500; }
+    .progress-stats { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: #80868b; }
+
+    .error-message { background-color: #fce8e6; color: #c5221f; padding: 12px; border-radius: 4px; margin-top: 16px; font-size: 13px; display: none; border: 1px solid #fad2cf; }
+  </style>
+</head>
+
+<body>
+  <h2>📄 Pengaturan PDF Generator</h2>
+
+  <div id="form-container">
+    <div class="form-group">
+      <label for="template-type">Jenis Template:</label>
+      <select id="template-type">
+        <option value="slides">Google Slides</option>
+        <option value="docs">Google Docs</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="template-id">ID atau URL Template:</label>
+      <input type="text" id="template-id" placeholder="Masukkan ID atau URL template" required>
+      <div class="form-hint">Contoh: https://docs.google.com/presentation/d/...</div>
+    </div>
+
+    <div class="form-group">
+      <label for="folder-id">ID atau URL Folder Hasil:</label>
+      <input type="text" id="folder-id" placeholder="Masukkan ID atau URL folder" required>
+      <div class="form-hint">Folder di Google Drive untuk menyimpan file PDF</div>
+    </div>
+
+    <div class="form-group">
+      <label for="data-range">Jumlah Kolom Data:</label>
+      <input type="number" id="data-range" min="1" max="50" value="3">
+      <div class="form-hint">Jumlah kolom yang berisi data placeholder (&lt;&lt;1&gt;&gt;, &lt;&lt;2&gt;&gt;, dst)</div>
+    </div>
+
+    <div class="form-group">
+      <label for="pdf-column">Posisi Hasil (Kolom):</label>
+      <input type="number" id="pdf-column" min="1" max="100" value="4">
+      <div class="form-hint">Nomor kolom untuk menyimpan URL PDF yang dihasilkan</div>
+    </div>
+
+    <div class="form-group">
+      <label for="title-suffix">Keterangan Judul (Opsional):</label>
+      <input type="text" id="title-suffix" placeholder="Opsional: suffix untuk nama file">
+    </div>
+  </div>
+
+  <div class="progress-container" id="progress-container">
+    <div class="progress-bar">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+    <div class="progress-text" id="progress-text">Mempersiapkan...</div>
+    <div class="progress-stats">
+      <span id="progress-count">0 / 0</span>
+      <span id="progress-time">Waktu: 0s</span>
+    </div>
+  </div>
+
+  <div class="error-message" id="error-message"></div>
+
+  <div class="button-group" id="button-group">
+    <button class="secondary" onclick="closeDialog()">Batal</button>
+    <button id="generate-btn" onclick="startGeneration()">Generate PDF</button>
+  </div>
+
+  <script>
+    const state = {
+      totalFiles: 0,
+      currentIndex: 0,
+      startTime: null,
+      isProcessing: false,
+      errors: [],
+      maxRetries: 3,
+      retryCount: 0,
+      timeoutId: null,
+      intervalId: null
+    };
+
+    document.addEventListener("DOMContentLoaded", function() {
+      console.log("Dialog initialized");
+      loadSettings();
+    });
+
+    function loadSettings() {
+      google.script.run
+        .withSuccessHandler(function(settings) {
+          console.log("Settings loaded:", settings);
+          document.getElementById('template-id').value = settings.templateId || '';
+          document.getElementById('folder-id').value = settings.folderId || '';
+          document.getElementById('data-range').value = settings.dataRange || 3;
+          document.getElementById('pdf-column').value = settings.pdfColumn || 4;
+          document.getElementById('title-suffix').value = settings.titleSuffix || '';
+        })
+        .withFailureHandler(function(error) {
+          console.error("Failed to load settings:", error);
+          showError("Gagal memuat pengaturan: " + error.message);
+        })
+        .getTemplateSettings();
+    }
+
+    function validateInputs() {
+      const templateId = document.getElementById('template-id').value.trim();
+      const folderId = document.getElementById('folder-id').value.trim();
+      const dataRange = parseInt(document.getElementById('data-range').value);
+      const pdfColumn = parseInt(document.getElementById('pdf-column').value);
+
+      const errors = [];
+
+      if (!templateId) errors.push('Template ID harus diisi');
+      if (!folderId) errors.push('Folder ID harus diisi');
+      if (isNaN(dataRange) || dataRange < 1 || dataRange > 50) errors.push('Jumlah Kolom Data harus antara 1-50');
+      if (isNaN(pdfColumn) || pdfColumn < 1 || pdfColumn > 100) errors.push('Posisi Hasil harus antara 1-100');
+
+      if (errors.length > 0) {
+        showError(errors.join('\n'));
+        return false;
+      }
+
+      hideError();
+      return true;
+    }
+
+    function startGeneration() {
+      if (!validateInputs()) return;
+      if (state.isProcessing) return;
+
+      const params = {
+        templateType: document.getElementById('template-type').value,
+        templateId: document.getElementById('template-id').value.trim(),
+        folderId: document.getElementById('folder-id').value.trim(),
+        dataRange: parseInt(document.getElementById('data-range').value),
+        pdfColumn: parseInt(document.getElementById('pdf-column').value),
+        titleSuffix: document.getElementById('title-suffix').value.trim()
+      };
+
+      console.log("Starting generation with params:", params);
+
+      state.isProcessing = true;
+      state.startTime = new Date();
+      state.errors = [];
+
+      document.getElementById('form-container').style.opacity = '0.5';
+      document.getElementById('form-container').style.pointerEvents = 'none';
+      document.getElementById('progress-container').style.display = 'block';
+      document.getElementById('generate-btn').disabled = true;
+      hideError();
+
+      updateProgressUI({
+        current: 0,
+        total: 1,
+        message: 'Menginisialisasi...'
+      });
+
+      state.intervalId = setInterval(updateTimeDisplay, 1000);
+
+      google.script.run
+        .withSuccessHandler(onInitSuccess)
+        .withFailureHandler(onInitFailure)
+        .generatePDFsWithProgress(params);
+    }
+
+    function onInitSuccess(initialProgress) {
+      console.log("Init success:", initialProgress);
+      state.totalFiles = initialProgress.total || 0;
+      state.currentIndex = 0;
+
+      if (state.totalFiles === 0) {
+        updateProgressUI({
+          current: 0,
+          total: 0,
+          message: 'Tidak ada file untuk diproses.',
+          complete: true
+        });
+        finishProcess();
+        return;
+      }
+
+      updateProgressUI(initialProgress);
+      processNextItem(0);
+    }
+
+    function onInitFailure(error) {
+      console.error("Init failure:", error);
+      showError('Gagal menginisialisasi: ' + (error.message || error));
+      resetUI();
+    }
+
+    function processNextItem(index) {
+      if (state.timeoutId) {
+        clearTimeout(state.timeoutId);
+        state.timeoutId = null;
+      }
+
+      if (index >= state.totalFiles) {
+        updateProgressUI({
+          current: state.totalFiles,
+          total: state.totalFiles,
+          message: 'Selesai!',
+          complete: true
+        });
+        finishProcess();
+        return;
+      }
+
+      state.currentIndex = index;
+
+      state.timeoutId = setTimeout(function() {
+        console.warn("Timeout waiting for server response");
+        handleProcessError({ message: "Timeout: Tidak ada respons dari server dalam 45 detik" }, index);
+      }, 45000);
+
+      google.script.run
+        .withSuccessHandler(function(progress) {
+          clearTimeout(state.timeoutId);
+          state.timeoutId = null;
+          state.retryCount = 0;
+
+          updateProgressUI(progress);
+
+          if (progress.error && !progress.continueOnError) {
+            state.errors.push({ index: index, error: progress.error });
+            showError('Fatal Error: ' + progress.error);
+            finishProcess();
+            return;
+          }
+
+          if (progress.error && progress.continueOnError) {
+            state.errors.push({ index: index, error: progress.error });
+          }
+
+          if (progress.complete) {
+            finishProcess();
+            return;
+          }
+
+          setTimeout(function() {
+            processNextItem(index + 1);
+          }, 10);
+        })
+        .withFailureHandler(function(error) {
+          clearTimeout(state.timeoutId);
+          state.timeoutId = null;
+          handleProcessError(error, index);
+        })
+        .processPDFBatch(index);
+    }
+
+    function handleProcessError(error, index) {
+      console.error("Process error at index", index, ":", error);
+      state.retryCount++;
+
+      if (state.retryCount <= state.maxRetries) {
+        console.log("Retrying... attempt", state.retryCount, "of", state.maxRetries);
+        updateProgressUI({
+          current: index,
+          total: state.totalFiles,
+          message: 'Error koneksi. Mencoba ulang (' + state.retryCount + '/' + state.maxRetries + ')...'
+        });
+
+        const delay = 2000 * Math.pow(2, state.retryCount - 1);
+        setTimeout(function() {
+          processNextItem(index);
+        }, delay);
+      } else {
+        state.errors.push({ index: index, error: error.message || error });
+        showError('Gagal setelah ' + state.maxRetries + ' percobaan. Cek koneksi internet Anda.');
+        finishProcess();
+      }
+    }
+
+    function updateProgressUI(progressData) {
+      const total = progressData.total || 1;
+      const current = progressData.current || 0;
+      const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+
+      const progressFill = document.getElementById('progress-fill');
+      const progressText = document.getElementById('progress-text');
+      const progressCount = document.getElementById('progress-count');
+
+      progressFill.style.width = percent + '%';
+      progressText.innerText = progressData.message || 'Memproses...';
+      progressCount.innerText = current + ' / ' + total;
+
+      progressFill.classList.remove('complete', 'error');
+      if (progressData.complete) {
+        progressFill.classList.add('complete');
+      } else if (progressData.error && !progressData.continueOnError) {
+        progressFill.classList.add('error');
+      }
+    }
+
+    function updateTimeDisplay() {
+      if (!state.startTime) return;
+      const elapsed = Math.round((new Date() - state.startTime) / 1000);
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      document.getElementById('progress-time').innerText = 'Waktu: ' + (minutes > 0 ? minutes + 'm ' : '') + seconds + 's';
+    }
+
+    function showError(message) {
+      const errorDiv = document.getElementById('error-message');
+      errorDiv.innerText = message;
+      errorDiv.style.display = 'block';
+    }
+
+    function hideError() {
+      document.getElementById('error-message').style.display = 'none';
+    }
+
+    function finishProcess() {
+      console.log("Finishing process. Errors:", state.errors);
+      state.isProcessing = false;
+
+      if (state.intervalId) { clearInterval(state.intervalId); state.intervalId = null; }
+      if (state.timeoutId) { clearTimeout(state.timeoutId); state.timeoutId = null; }
+
+      const buttonGroup = document.getElementById('button-group');
+      buttonGroup.innerHTML = '';
+
+      if (state.errors.length > 0) {
+        const viewErrorsBtn = document.createElement('button');
+        viewErrorsBtn.className = 'secondary';
+        viewErrorsBtn.style.marginRight = '10px';
+        viewErrorsBtn.innerText = 'Lihat Error (' + state.errors.length + ')';
+        viewErrorsBtn.onclick = function() {
+          const errorMsg = state.errors.map(function(e) { return 'Item ' + (e.index + 1) + ': ' + e.error; }).join('\n');
+          alert('Detail Error:\n' + errorMsg);
+        };
+        buttonGroup.appendChild(viewErrorsBtn);
+      }
+
+      const closeBtn = document.createElement('button');
+      closeBtn.innerText = 'Tutup';
+      closeBtn.onclick = closeDialog;
+      buttonGroup.appendChild(closeBtn);
+
+      if (state.errors.length === 0) {
+      }
+    }
+
+    function resetUI() {
+      state.isProcessing = false;
+      if (state.intervalId) { clearInterval(state.intervalId); state.intervalId = null; }
+      if (state.timeoutId) { clearTimeout(state.timeoutId); state.timeoutId = null; }
+
+      document.getElementById('form-container').style.opacity = '1';
+      document.getElementById('form-container').style.pointerEvents = 'auto';
+      document.getElementById('progress-container').style.display = 'none';
+      document.getElementById('generate-btn').disabled = false;
+
+      const btnGroup = document.getElementById('button-group');
+      btnGroup.innerHTML = '';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'secondary';
+      cancelBtn.onclick = closeDialog;
+      cancelBtn.innerText = 'Batal';
+
+      const genBtn = document.createElement('button');
+      genBtn.id = 'generate-btn';
+      genBtn.onclick = startGeneration;
+      genBtn.innerText = 'Generate PDF';
+
+      btnGroup.appendChild(cancelBtn);
+      btnGroup.appendChild(genBtn);
+    }
+
+    function closeDialog() {
+      if (state.isProcessing) {
+        google.script.run.cancelProcess();
+      }
+      google.script.host.close();
+    }
+  </script>
+</body>
+
+</html>
