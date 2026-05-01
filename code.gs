@@ -1,11 +1,19 @@
 const MAX_EXECUTION_TIME = 330;
 const MAX_BATCH_SIZE = 10;
 const APP_NAMESPACE = 'gdocsAutomator';
-
+const CONFIG_COLUMNS = 10;
+const DATA_START_ROW = 3;
+const DEFAULT_DATA_COLUMNS = 3;
+const DEFAULT_PDF_COLUMN = 4;
+const MAX_DATA_COLUMNS = 50;
+const MAX_RESULT_COLUMN = 100;
+const LOCK_WAIT_MS = 10000;
+const PROPERTY_CHUNK_SIZE = 8000;
+const APP_MANAGED_TRIGGER_FUNCTIONS = ['continuePDFGeneration'];
 const EMAIL_DELAY_MS = 500;
 
 /**
- * Fungsi yang dijalankan saat menu dibuka. 
+ * Fungsi yang dijalankan saat menu dibuka.
  */
 function onOpen() {
   createAdvancedMenu();
@@ -65,7 +73,7 @@ function showAboutDialog() {
   ui.alert(
     'GDocs Automator',
     'Aplikasi untuk mengotomatisasi tugas-tugas Google Docs, Slides, Drive dan Email.\n\n' +
-    'Dibuat oleh:  GitHub Copilot\n\n',
+    'Dibuat oleh: GitHub Copilot\n\n',
     ui.ButtonSet.OK
   );
 }
@@ -85,7 +93,7 @@ function resetApplicationState() {
     return;
   }
 
-  deleteAllTriggers();
+  deleteApplicationTriggers();
 
   const cache = CacheService.getScriptCache();
   const cacheKeys = ['currentIndex', 'templateType', 'processedCount', 'dialogProgress'];
@@ -107,7 +115,7 @@ function resetApplicationState() {
 
 
 /**
- * Memulai proses pembuatan PDF dari template Slides. 
+ * Memulai proses pembuatan PDF dari template Slides.
  */
 function generatePDFsFromSlides() {
   return ErrorHandler.execute(
@@ -121,7 +129,7 @@ function generatePDFsFromSlides() {
 }
 
 /**
- * Memulai proses pembuatan PDF dari template Docs. 
+ * Memulai proses pembuatan PDF dari template Docs.
  */
 function generatePDFsFromDocs() {
   return ErrorHandler.execute(
@@ -135,19 +143,19 @@ function generatePDFsFromDocs() {
 }
 
 /**
- * Membuat template pada baris pertama jika belum ada. 
+ * Membuat template pada baris pertama jika belum ada.
  */
 function createTemplate() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  const firstRow = sheet.getRange(1, 1, 1, sheet.getMaxColumns()).getValues()[0];
+  const firstRow = sheet.getRange(1, 1, 1, CONFIG_COLUMNS).getValues()[0];
   const ui = SpreadsheetApp.getUi();
   const logger = new Logger('createTemplate');
 
   const templateData = [
     ['Template', '<<masukan id atau url template>>',
       'Folder Hasil', '<<masukan id atau url folder hasil>>',
-      'Jumlah Kolom Data', 3,
-      'Posisi Hasil', 4,
+      'Jumlah Kolom Data', DEFAULT_DATA_COLUMNS,
+      'Posisi Hasil', DEFAULT_PDF_COLUMN,
       'Keterangan Judul', '']
   ];
 
@@ -196,8 +204,8 @@ function getTemplateSettings() {
     return {
       templateId: templateIdRaw ? templateIdRaw.toString().trim() : '',
       folderId: folderIdRaw ? folderIdRaw.toString().trim() : '',
-      dataRange: validateNumeric(dataRangeRaw, 3),
-      pdfColumn: validateNumeric(pdfColumnRaw, 4),
+      dataRange: clampNumber(validateNumeric(dataRangeRaw, DEFAULT_DATA_COLUMNS), 1, MAX_DATA_COLUMNS),
+      pdfColumn: clampNumber(validateNumeric(pdfColumnRaw, DEFAULT_PDF_COLUMN), 1, MAX_RESULT_COLUMN),
       titleSuffix: titleSuffixRaw ? titleSuffixRaw.toString().trim() : ''
     };
   } catch (e) {
@@ -205,8 +213,8 @@ function getTemplateSettings() {
     return {
       templateId: '',
       folderId: '',
-      dataRange: 3,
-      pdfColumn: 4,
+      dataRange: DEFAULT_DATA_COLUMNS,
+      pdfColumn: DEFAULT_PDF_COLUMN,
       titleSuffix: ''
     };
   }
@@ -218,41 +226,50 @@ function getTemplateSettings() {
  */
 function saveTemplateSettings(settings) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  const normalized = normalizeTemplateSettings(settings);
 
-  sheet.getRange('B1').setValue(settings.templateId || '');
-  sheet.getRange('D1').setValue(settings.folderId || '');
-  sheet.getRange('F1').setValue(settings.dataRange || 3);
-  sheet.getRange('H1').setValue(settings.pdfColumn || 4);
-  sheet.getRange('J1').setValue(settings.titleSuffix || '');
+  sheet.getRange('B1').setValue(normalized.templateId);
+  sheet.getRange('D1').setValue(normalized.folderId);
+  sheet.getRange('F1').setValue(normalized.dataRange);
+  sheet.getRange('H1').setValue(normalized.pdfColumn);
+  sheet.getRange('J1').setValue(normalized.titleSuffix);
 }
 
 /**
- * Fungsi untuk melanjutkan pembuatan PDF setelah waktu eksekusi habis. 
+ * Fungsi untuk melanjutkan pembuatan PDF setelah waktu eksekusi habis.
  */
 function continuePDFGeneration() {
-  const appState = new AppState('pdfGeneration');
-  const templateType = appState.get('templateType');
-  const logger = new Logger('continuePDFGeneration');
+  return ErrorHandler.execute(() => {
+    deleteTriggersByFunction('continuePDFGeneration');
 
-  logger.info(`Melanjutkan proses pembuatan PDF dengan template ${templateType}`);
+    const appState = new AppState('pdfGeneration');
+    const templateType = appState.get('templateType');
+    const logger = new Logger('continuePDFGeneration');
 
-  if (templateType) {
-    logToSheet(logger);
-    generatePDFs(templateType, true);
-  } else {
-    logger.warn('Template type tidak ditemukan di state, menggunakan default (slides)');
-    logToSheet(logger);
-    generatePDFs('slides', true);
-  }
+    logger.info(`Melanjutkan proses pembuatan PDF dengan template ${templateType}`);
+
+    if (templateType) {
+      logToSheet(logger);
+      generatePDFs(templateType, true);
+    } else {
+      logger.warn('Template type tidak ditemukan di state, menggunakan default (slides)');
+      logToSheet(logger);
+      generatePDFs('slides', true);
+    }
+  }, {
+    context: 'melanjutkan pembuatan PDF',
+    showAlert: false,
+    logError: true
+  });
 }
 
 /**
- * Membuat PDF dari template Slides. 
+ * Membuat PDF dari template Slides.
  *
- * @param {string} templateId - ID template Slides. 
+ * @param {string} templateId - ID template Slides.
  * @param {Array} row - Data baris dari Google Sheets.
- * @param {string} ketJudul - Judul tambahan untuk PDF. 
- * @param {Folder} folder - Folder tempat menyimpan PDF. 
+ * @param {string} ketJudul - Judul tambahan untuk PDF.
+ * @param {Folder} folder - Folder tempat menyimpan PDF.
  * @param {Range} pdfUrlCell - Sel tempat menyimpan URL PDF.
  * @returns {string} - Judul PDF yang dibuat.
  */
@@ -264,22 +281,15 @@ function generatePDFfromSlides(templateId, row, ketJudul, folder, pdfUrlCell) {
     folder: folder,
     pdfUrlCell: pdfUrlCell,
     processTemplate: (fileId, data) => {
-      const slide = SlidesApp.openById(fileId);
-      const slides = slide.getSlides();
+      const presentation = SlidesApp.openById(fileId);
 
-      slides.forEach(slideContent => {
-        const shapes = slideContent.getShapes();
-        shapes.forEach(shape => {
-          const textRange = shape.getText();
-          data.forEach((value, j) => {
-            const placeholder = `<<${j + 1}>>`;
-            const safeValue = sanitizeTextValue(value);
-            textRange.replaceAllText(placeholder, safeValue);
-          });
-        });
+      data.forEach((value, j) => {
+        const placeholder = `<<${j + 1}>>`;
+        const safeValue = sanitizeTextValue(value);
+        presentation.replaceAllText(placeholder, safeValue);
       });
 
-      slide.saveAndClose();
+      presentation.saveAndClose();
     }
   }), 3, 1000);
 }
@@ -288,7 +298,7 @@ function generatePDFfromSlides(templateId, row, ketJudul, folder, pdfUrlCell) {
  * Membuat PDF dari template Docs.
  *
  * @param {string} templateId - ID template Docs.
- * @param {Array} row - Data baris dari Google Sheets. 
+ * @param {Array} row - Data baris dari Google Sheets.
  * @param {string} ketJudul - Judul tambahan untuk PDF.
  * @param {Folder} folder - Folder tempat menyimpan PDF.
  * @param {Range} pdfUrlCell - Sel tempat menyimpan URL PDF.
@@ -334,6 +344,9 @@ function sanitizeTextValue(value) {
   if (value === null || value === undefined) {
     return '';
   }
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return formatDate(value);
+  }
   return value.toString()
     .replace(/\$/g, '$$$$');
 }
@@ -362,7 +375,7 @@ function createPDFfromTemplate(config) {
       throw new Error(`Template tidak ditemukan atau tidak dapat diakses: ${e.message}`);
     }
 
-    newFile = templateFile.makeCopy(safeFileName);
+    newFile = templateFile.makeCopy(safeFileName, folder);
     newFileId = newFile.getId();
 
     try {
@@ -371,7 +384,7 @@ function createPDFfromTemplate(config) {
       throw new Error(`Error saat memproses template: ${e.message}`);
     }
 
-    const pdfBlob = newFile.getAs('application/pdf');
+    const pdfBlob = newFile.getAs(MimeType.PDF).setName(`${safeFileName}.pdf`);
     pdfFile = folder.createFile(pdfBlob);
 
     const pdfUrl = pdfFile.getUrl();
@@ -399,21 +412,54 @@ function createPDFfromTemplate(config) {
  * @returns {Object} - Status awal proses
  */
 function generatePDFsWithProgress(params) {
+  return withDocumentLock(
+    () => generatePDFsWithProgressInternal(params),
+    { timeoutMs: LOCK_WAIT_MS, context: 'inisialisasi PDF' }
+  );
+}
+
+function generatePDFsWithProgressInternal(params) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   const logger = new Logger('generatePDFsWithProgress');
 
   logger.info('Memulai inisialisasi proses PDF dengan dialog');
 
+  const normalizedParams = normalizeTemplateSettings(params);
+  const templateType = normalizeTemplateType(params.templateType);
+  const templateId = extractFileId(normalizedParams.templateId);
+  const folderId = extractFileId(normalizedParams.folderId);
+
+  if (!templateId || !folderId) {
+    throw new Error('Format Template ID atau Folder ID tidak valid.');
+  }
+
+  let folder;
+  try {
+    folder = DriveApp.getFolderById(folderId);
+  } catch (error) {
+    throw new Error(`Folder hasil tidak ditemukan atau tidak dapat diakses: ${error.message}`);
+  }
+
+  try {
+    if (templateType === 'slides') {
+      SlidesApp.openById(templateId).getName();
+    } else {
+      DocumentApp.openById(templateId).getName();
+    }
+  } catch (error) {
+    throw new Error(`Template tidak dapat diakses sebagai ${templateType}: ${error.message}`);
+  }
+
   saveTemplateSettings({
-    templateId: params.templateId,
-    folderId: params.folderId,
-    dataRange: params.dataRange,
-    pdfColumn: params.pdfColumn,
-    titleSuffix: params.titleSuffix
+    templateId: normalizedParams.templateId,
+    folderId: normalizedParams.folderId,
+    dataRange: normalizedParams.dataRange,
+    pdfColumn: normalizedParams.pdfColumn,
+    titleSuffix: normalizedParams.titleSuffix
   });
 
   const lastRow = sheet.getLastRow();
-  if (lastRow < 3) {
+  if (lastRow < DATA_START_ROW) {
     logger.warn('Tidak ada data untuk diproses (baris data dimulai dari baris 3)');
     return {
       current: 0,
@@ -423,26 +469,38 @@ function generatePDFsWithProgress(params) {
     };
   }
 
-  const data = sheet.getRange(3, 1, lastRow - 2, params.dataRange).getValues();
+  const maxCol = Math.max(normalizedParams.dataRange, normalizedParams.pdfColumn);
+  const data = sheet.getRange(DATA_START_ROW, 1, lastRow - DATA_START_ROW + 1, maxCol).getDisplayValues();
+  const indexMapping = [];
 
-  const filteredData = data.filter(row => row[0] !== '' && row[0] !== null && row[0] !== undefined);
-  const totalItems = filteredData.length;
+  data.forEach((row, originalIndex) => {
+    const hasData = row[0] !== '' && row[0] !== null && row[0] !== undefined;
+    const hasPdf = row[normalizedParams.pdfColumn - 1] !== '' &&
+      row[normalizedParams.pdfColumn - 1] !== null &&
+      row[normalizedParams.pdfColumn - 1] !== undefined;
+
+    if (hasData && !hasPdf) {
+      indexMapping.push(originalIndex);
+    }
+  });
+
+  const totalItems = indexMapping.length;
 
   logger.info(`Total item yang akan diproses: ${totalItems}`);
 
   const appState = new AppState('pdfGeneration');
+  if (appState.get('dialogMode', false) && appState.get('totalItems', 0) > 0) {
+    throw new Error('Masih ada proses PDF dialog yang berjalan. Tutup proses lama atau gunakan Admin > Reset State terlebih dahulu.');
+  }
+
+  appState.clear();
   appState.set('totalItems', totalItems);
-  appState.set('templateType', params.templateType);
+  appState.set('templateType', templateType);
+  appState.set('templateId', templateId);
+  appState.set('folderId', folder.getId());
   appState.set('dialogMode', true);
   appState.set('currentIndex', 0);
   appState.set('processedCount', 0);
-
-  const indexMapping = [];
-  data.forEach((row, originalIndex) => {
-    if (row[0] !== '' && row[0] !== null && row[0] !== undefined) {
-      indexMapping.push(originalIndex);
-    }
-  });
   appState.set('indexMapping', indexMapping);
 
   logToSheet(logger);
@@ -450,7 +508,7 @@ function generatePDFsWithProgress(params) {
   return {
     current: 0,
     total: totalItems,
-    message: 'Inisialisasi selesai, memulai proses.. .',
+    message: 'Inisialisasi selesai, memulai proses...',
     complete: false
   };
 }
@@ -468,21 +526,49 @@ function isTimeRunningOut(startTime, safetyMargin = 30) {
 }
 
 /**
- * Memproses pembuatan PDF berdasarkan tipe template. 
+ * Memproses pembuatan PDF berdasarkan tipe template.
  *
- * @param {string} templateType - Tipe template, bisa 'slides' atau 'docs'. 
+ * @param {string} templateType - Tipe template, bisa 'slides' atau 'docs'.
  * @param {boolean} isTriggered - Apakah fungsi dipanggil dari trigger
  */
 function generatePDFs(templateType, isTriggered = false) {
+  try {
+    return withDocumentLock(
+      () => generatePDFsInternal(templateType, isTriggered),
+      { timeoutMs: LOCK_WAIT_MS, context: 'pembuatan PDF' }
+    );
+  } catch (error) {
+    if (isTriggered && error.message && error.message.indexOf('sedang berjalan') !== -1) {
+      scheduleResumeOperation('continuePDFGeneration', 60);
+    }
+    throw error;
+  }
+}
+
+function generatePDFsInternal(templateType, isTriggered = false) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   const logger = new Logger('generatePDFs');
   const benchmark = new Benchmark('PDF Generation').start();
   const appState = new AppState('pdfGeneration');
 
-  const dialogMode = appState.get('dialogMode', false);
+  if (!isTriggered && appState.get('dialogMode', false) && appState.get('totalItems', 0) > 0) {
+    logger.error('Tidak dapat memulai dari menu karena proses dialog masih berjalan');
+    SpreadsheetApp.getUi().alert(
+      'Proses masih berjalan',
+      'Masih ada proses PDF dari dialog yang berjalan. Selesaikan, batalkan, atau reset state terlebih dahulu.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    logToSheet(logger);
+    return;
+  }
 
+  if (!isTriggered) {
+    appState.clear();
+  }
+
+  templateType = normalizeTemplateType(templateType);
   logger.info(`Memulai proses pembuatan PDF dengan template ${templateType}`);
-  logger.info(`Mode:  isTriggered=${isTriggered}, dialogMode=${dialogMode}`);
+  logger.info(`Mode: isTriggered=${isTriggered}`);
 
   const settings = getTemplateSettings();
   const templateIdOrUrl = settings.templateId;
@@ -494,7 +580,7 @@ function generatePDFs(templateType, isTriggered = false) {
   if (!templateIdOrUrl || !folderIdOrUrl) {
     logger.error('Template ID atau Folder ID tidak valid');
 
-    if (!isTriggered && !dialogMode) {
+    if (!isTriggered) {
       SpreadsheetApp.getUi().alert(
         'Error',
         'Template ID dan Folder ID harus diisi pada baris pertama.',
@@ -509,7 +595,7 @@ function generatePDFs(templateType, isTriggered = false) {
   if (dataRange <= 0 || pdfColumn <= 0) {
     logger.error('Jumlah kolom data atau posisi hasil tidak valid');
 
-    if (!isTriggered && !dialogMode) {
+    if (!isTriggered) {
       SpreadsheetApp.getUi().alert(
         'Error',
         'Jumlah kolom data dan posisi hasil harus berupa angka positif.',
@@ -527,7 +613,7 @@ function generatePDFs(templateType, isTriggered = false) {
   if (!templateId || !folderId) {
     logger.error('Tidak dapat mengekstrak ID dari URL/ID yang diberikan');
 
-    if (!isTriggered && !dialogMode) {
+    if (!isTriggered) {
       SpreadsheetApp.getUi().alert(
         'Error',
         'Format Template ID atau Folder ID tidak valid.',
@@ -548,10 +634,10 @@ function generatePDFs(templateType, isTriggered = false) {
       logger.info(`Folder hasil ditemukan: ${folder.getName()}`);
     } catch (error) {
       logger.error(`Folder tidak ditemukan atau tidak dapat diakses: ${error.message}`);
-      if (!isTriggered && !dialogMode) {
+      if (!isTriggered) {
         SpreadsheetApp.getUi().alert(
           'Error',
-          `Folder hasil tidak ditemukan atau tidak dapat diakses:  ${error.message}`,
+          `Folder hasil tidak ditemukan atau tidak dapat diakses:  ${error.message}`,
           SpreadsheetApp.getUi().ButtonSet.OK
         );
       }
@@ -560,16 +646,16 @@ function generatePDFs(templateType, isTriggered = false) {
     }
 
     const lastRow = sheet.getLastRow();
-    if (lastRow < 3) {
+    if (lastRow < DATA_START_ROW) {
       logger.warn('Tidak ada data untuk diproses');
-      if (!isTriggered && !dialogMode) {
+      if (!isTriggered) {
         SpreadsheetApp.getUi().alert('Info', 'Tidak ada data untuk diproses. ', SpreadsheetApp.getUi().ButtonSet.OK);
       }
       logToSheet(logger);
       return;
     }
 
-    const allData = sheet.getRange(3, 1, lastRow - 2, Math.max(dataRange, pdfColumn)).getValues();
+    const allData = sheet.getRange(DATA_START_ROW, 1, lastRow - DATA_START_ROW + 1, Math.max(dataRange, pdfColumn)).getDisplayValues();
 
     benchmark.checkpoint('Data diambil dari sheet');
 
@@ -587,7 +673,7 @@ function generatePDFs(templateType, isTriggered = false) {
 
     if (toProcess.length === 0) {
       logger.info('Semua data sudah memiliki PDF atau tidak ada data');
-      if (!isTriggered && !dialogMode) {
+      if (!isTriggered) {
         SpreadsheetApp.getUi().alert('Info', 'Semua data sudah diproses atau tidak ada data baru.', SpreadsheetApp.getUi().ButtonSet.OK);
       }
       logToSheet(logger);
@@ -603,7 +689,7 @@ function generatePDFs(templateType, isTriggered = false) {
     } catch (error) {
       logger.error(`Gagal membuka template: ${error.message}`);
 
-      if (!isTriggered && !dialogMode) {
+      if (!isTriggered) {
         SpreadsheetApp.getUi().alert(
           'Error',
           `Tidak dapat mengakses template: ${error.message}`,
@@ -617,7 +703,7 @@ function generatePDFs(templateType, isTriggered = false) {
 
     benchmark.checkpoint('Template diakses');
 
-    if (!isTriggered && !dialogMode) {
+    if (!isTriggered) {
       const estimatedTime = Math.ceil(toProcess.length * 7);
       const estimatedMinutes = Math.ceil(estimatedTime / 60);
 
@@ -640,42 +726,44 @@ function generatePDFs(templateType, isTriggered = false) {
         logToSheet(logger);
         return;
       }
-    } else if (dialogMode) {
-      logger.info('Berjalan dalam mode dialog, melewati konfirmasi');
     } else {
       logger.info('Melanjutkan proses dari trigger, melewati konfirmasi');
     }
 
     benchmark.checkpoint('Konfirmasi user selesai atau dilewati');
 
-    let processIndex = parseInt(appState.get('currentIndex', 0)) || 0;
+    let processIndex = 0;
     let processedCount = parseInt(appState.get('processedCount', 0)) || 0;
 
     appState.set('templateType', templateType);
     appState.set('totalItems', toProcess.length);
+    appState.set('currentIndex', 0);
 
     const startTime = new Date();
     let lastPdfTitle = appState.get('lastPdfTitle', '');
 
     benchmark.checkpoint('Mulai pemrosesan file');
-    logger.info(`Melanjutkan dari process index: ${processIndex}, total diproses sebelumnya: ${processedCount}`);
+    logger.info(`Memproses ${toProcess.length} baris tersisa, total diproses sebelumnya: ${processedCount}`);
 
     for (; processIndex < toProcess.length; processIndex++) {
       if (isTimeRunningOut(startTime, 45)) {
-        appState.set('currentIndex', processIndex);
+        appState.set('currentIndex', 0);
         appState.set('processedCount', processedCount);
         appState.set('lastPdfTitle', lastPdfTitle);
 
         const triggerId = scheduleResumeOperation('continuePDFGeneration', 2);
         logger.info(`Waktu hampir habis, menjadwalkan lanjutan dengan trigger: ${triggerId}`);
 
-        const progressPercent = Math.round(processIndex * 100 / toProcess.length);
-        logger.info(`Timeout preventif.  Progres: ${progressPercent}% (${processIndex}/${toProcess.length})`);
+        const remainingCount = Math.max(0, toProcess.length - processIndex);
+        const progressPercent = processedCount + remainingCount > 0
+          ? Math.round(processedCount * 100 / (processedCount + remainingCount))
+          : 100;
+        logger.info(`Timeout preventif. Progres total: ${progressPercent}% (${processedCount} selesai, ${remainingCount} tersisa)`);
 
-        if (!isTriggered && !dialogMode) {
+        if (!isTriggered) {
           SpreadsheetApp.getUi().alert(
             'Batas Waktu',
-            `Proses telah mencapai ${progressPercent}% (${processIndex} dari ${toProcess.length} file).\n` +
+            `Proses telah mencapai ${progressPercent}% (${processedCount} selesai, ${remainingCount} tersisa).\n` +
             `Proses akan dilanjutkan secara otomatis dalam beberapa detik.\n` +
             `Harap jangan menutup spreadsheet ini. `,
             SpreadsheetApp.getUi().ButtonSet.OK
@@ -688,7 +776,7 @@ function generatePDFs(templateType, isTriggered = false) {
 
       const item = toProcess[processIndex];
       const row = item.data.slice(0, dataRange);
-      const actualSheetRow = 3 + item.sheetRowIndex;
+      const actualSheetRow = DATA_START_ROW + item.sheetRowIndex;
       const pdfUrlCell = sheet.getRange(actualSheetRow, pdfColumn);
 
       try {
@@ -698,21 +786,21 @@ function generatePDFs(templateType, isTriggered = false) {
           lastPdfTitle = generatePDFfromDocs(templateId, row, ketJudul, folder, pdfUrlCell);
         }
         processedCount++;
-        logger.info(`Berhasil memproses baris ${actualSheetRow}:  ${lastPdfTitle}`);
+        logger.info(`Berhasil memproses baris ${actualSheetRow}:  ${lastPdfTitle}`);
       } catch (error) {
         logger.error(`Error pada baris ${actualSheetRow}: ${error.message}`);
 
-        pdfUrlCell.setValue(`Error: ${error.message}`);
+        pdfUrlCell.setValue(safeSheetText(`Error: ${error.message}`));
 
-        if (!isTriggered && !dialogMode) {
+        if (!isTriggered) {
           const continueChoice = SpreadsheetApp.getUi().alert(
             'Error',
-            `Error pada baris ${actualSheetRow}:  ${error.message}\n\nLanjutkan ke baris berikutnya?`,
+            `Error pada baris ${actualSheetRow}:  ${error.message}\n\nLanjutkan ke baris berikutnya?`,
             SpreadsheetApp.getUi().ButtonSet.YES_NO
           );
 
           if (continueChoice !== SpreadsheetApp.getUi().Button.YES) {
-            appState.set('currentIndex', processIndex);
+            appState.set('currentIndex', 0);
             appState.set('processedCount', processedCount);
             logToSheet(logger);
             return;
@@ -720,22 +808,8 @@ function generatePDFs(templateType, isTriggered = false) {
         }
       }
 
-      if (dialogMode && processIndex % 2 === 0) {
-        try {
-          const progressData = {
-            current: processIndex + 1,
-            total: toProcess.length,
-            message: `Memproses ${lastPdfTitle}... `,
-            complete: false
-          };
-          CacheService.getScriptCache().put('dialogProgress', JSON.stringify(progressData), 600);
-        } catch (e) {
-          logger.warn(`Error updating dialog progress: ${e.message}`);
-        }
-      }
-
       if (processIndex % 5 === 0) {
-        appState.set('currentIndex', processIndex);
+        appState.set('currentIndex', 0);
         appState.set('processedCount', processedCount);
         appState.set('lastPdfTitle', lastPdfTitle);
       }
@@ -748,24 +822,14 @@ function generatePDFs(templateType, isTriggered = false) {
     const endTime = new Date();
     const duration = ((endTime - startTime) / 1000).toFixed(2);
 
-    sheet.getRange(2, 1, 1, sheet.getMaxColumns()).setBackground('#b7e1cd');
+    sheet.getRange(2, 1, 1, Math.max(sheet.getLastColumn(), CONFIG_COLUMNS)).setBackground('#b7e1cd');
 
-    logger.info(`Proses selesai dalam ${duration} detik.  Total PDF dibuat:  ${processedCount}`);
+    logger.info(`Proses selesai dalam ${duration} detik.  Total PDF dibuat:  ${processedCount}`);
 
     const benchmarkResult = benchmark.end();
     logger.info(`Benchmark: ${JSON.stringify(benchmarkResult)}`);
 
-    if (dialogMode) {
-      const progressData = {
-        current: toProcess.length,
-        total: toProcess.length,
-        message: `Selesai!  ${processedCount} file diproses dalam ${duration} detik`,
-        complete: true
-      };
-      CacheService.getScriptCache().put('dialogProgress', JSON.stringify(progressData), 600);
-    }
-
-    if (!isTriggered && !dialogMode) {
+    if (!isTriggered) {
       SpreadsheetApp.getUi().alert(
         'Proses pembuatan PDF selesai!',
         `PDF yang dibuat: ${processedCount}\n` +
@@ -778,17 +842,17 @@ function generatePDFs(templateType, isTriggered = false) {
       );
     } else if (isTriggered) {
       const statusCol = pdfColumn + 1;
-      sheet.getRange(1, statusCol).setValue(`Proses selesai:  ${formatDate(endTime)}`);
+      sheet.getRange(1, statusCol).setValue(`Proses selesai:  ${formatDate(endTime)}`);
       sheet.getRange(2, statusCol).setValue(`PDF dibuat: ${processedCount}`);
     }
 
-    deleteAllTriggers();
+    deleteApplicationTriggers();
 
     logToSheet(logger);
   } catch (error) {
     logger.error(`Kesalahan tidak terduga: ${error.message}`, { stack: error.stack });
 
-    if (!isTriggered && !dialogMode) {
+    if (!isTriggered) {
       SpreadsheetApp.getUi().alert('Error', `Terjadi kesalahan: ${error.message}`, SpreadsheetApp.getUi().ButtonSet.OK);
     }
 
@@ -809,7 +873,7 @@ function backupConfiguration() {
 
   logger.info('Memulai proses backup konfigurasi');
 
-  const maxCols = sheet.getLastColumn() || 10;
+  const maxCols = CONFIG_COLUMNS;
   const configData = sheet.getRange(1, 1, 2, maxCols).getValues();
 
   const backup = {
@@ -835,7 +899,7 @@ function backupConfiguration() {
   backups.push(backup);
   appState.set('configurations', backups);
 
-  logger.info(`Backup berhasil disimpan.  Total backup: ${backups.length}`);
+  logger.info(`Backup berhasil disimpan.  Total backup: ${backups.length}`);
 
   ui.alert('Backup berhasil', `Konfigurasi telah dicadangkan pada ${formatDate(new Date())}`, ui.ButtonSet.OK);
 
@@ -896,7 +960,7 @@ function restoreConfiguration() {
     return;
   }
 
-  logger.info(`Memulihkan konfigurasi dari backup:  ${formatDate(new Date(backup.timestamp))}`);
+  logger.info(`Memulihkan konfigurasi dari backup:  ${formatDate(new Date(backup.timestamp))}`);
 
   const configData = backup.configData;
   if (configData && configData.length > 0 && configData[0].length > 0) {
@@ -995,40 +1059,37 @@ function extractFileInfo() {
     let processedCount = 0;
     let errorCount = 0;
 
-    const results = [];
+    const outputRange = sheet.getRange(2, nameCol, lastRow - 1, 2);
+    const outputValues = outputRange.getValues();
 
     for (const item of validRows) {
       const fileIdOrUrl = item.value.toString();
       const fileId = extractFileId(fileIdOrUrl);
+      const outputIndex = item.rowIndex - 2;
 
       if (fileId) {
         try {
           const file = DriveApp.getFileById(fileId);
-          results.push({
-            rowIndex: item.rowIndex,
-            name: file.getName(),
-            desc: file.getDescription() || ''
-          });
+          outputValues[outputIndex][0] = safeSheetText(file.getName());
+          outputValues[outputIndex][1] = safeSheetText(file.getDescription() || '');
           processedCount++;
         } catch (error) {
-          results.push({
-            rowIndex: item.rowIndex,
-            name: 'Error',
-            desc: error.message
-          });
+          outputValues[outputIndex][0] = 'Error';
+          outputValues[outputIndex][1] = safeSheetText(error.message);
           errorCount++;
         }
+      } else {
+        outputValues[outputIndex][0] = 'Error';
+        outputValues[outputIndex][1] = 'ID file tidak valid';
+        errorCount++;
       }
     }
 
-    results.forEach(result => {
-      sheet.getRange(result.rowIndex, nameCol).setValue(result.name);
-      sheet.getRange(result.rowIndex, descCol).setValue(result.desc);
-    });
+    outputRange.setValues(outputValues);
 
     const duration = benchmark.end().totalTime.toFixed(2);
 
-    logger.info(`Proses selesai.  Berhasil:  ${processedCount}, Gagal: ${errorCount}, Durasi: ${duration} detik`);
+    logger.info(`Proses selesai.  Berhasil:  ${processedCount}, Gagal: ${errorCount}, Durasi: ${duration} detik`);
 
     ui.alert(
       'Proses selesai',
@@ -1125,26 +1186,35 @@ function updateFileInfo() {
       sheet.getRange(1, statusCol).setValue('Status Update');
     }
 
+    const statusRange = sheet.getRange(2, statusCol, lastRow - 1, 1);
+    const statusValues = statusRange.getValues();
+
     for (const item of validRows) {
       const fileId = extractFileId(item.fileIdOrUrl.toString());
+      const statusIndex = item.rowIndex - 2;
 
       if (fileId) {
         try {
           const file = DriveApp.getFileById(fileId);
           if (item.newName) file.setName(item.newName);
           if (item.newDesc) file.setDescription(item.newDesc);
-          sheet.getRange(item.rowIndex, statusCol).setValue('OK');
+          statusValues[statusIndex][0] = 'OK';
           successCount++;
         } catch (error) {
-          sheet.getRange(item.rowIndex, statusCol).setValue(`Error: ${error.message}`);
+          statusValues[statusIndex][0] = safeSheetText(`Error: ${error.message}`);
           errorCount++;
         }
+      } else {
+        statusValues[statusIndex][0] = 'Error: ID file tidak valid';
+        errorCount++;
       }
     }
 
+    statusRange.setValues(statusValues);
+
     const duration = benchmark.end().totalTime.toFixed(2);
 
-    logger.info(`Proses selesai.  Berhasil:  ${successCount}, Gagal: ${errorCount}, Durasi: ${duration} detik`);
+    logger.info(`Proses selesai.  Berhasil:  ${successCount}, Gagal: ${errorCount}, Durasi: ${duration} detik`);
 
     ui.alert(
       'Proses selesai',
@@ -1173,7 +1243,7 @@ function insertImages() {
 
     const responseFileCol = ui.prompt(
       'Ekstrak Gambar ke Cell',
-      'Masukkan nomor kolom untuk file link (misal:  1 untuk kolom A):',
+      'Masukkan nomor kolom untuk file link (misal:  1 untuk kolom A):',
       ui.ButtonSet.OK_CANCEL
     );
 
@@ -1191,7 +1261,7 @@ function insertImages() {
 
     const responseImgCol = ui.prompt(
       'Ekstrak Gambar ke Cell',
-      'Masukkan nomor kolom untuk gambar (misal:  2 untuk kolom B):',
+      'Masukkan nomor kolom untuk gambar (misal:  2 untuk kolom B):',
       ui.ButtonSet.OK_CANCEL
     );
 
@@ -1253,11 +1323,13 @@ function insertImages() {
     let successCount = 0;
     let noAccessCount = 0;
     let errorCount = 0;
+    const imageRange = sheet.getRange(2, imgCol, lastRow - 1, 1);
+    const imageValues = imageRange.getValues();
 
     for (const item of validRows) {
       const fileIdOrUrl = item.value.toString();
       const fileId = extractFileId(fileIdOrUrl);
-      const imgCell = sheet.getRange(item.rowIndex, imgCol);
+      const imageIndex = item.rowIndex - 2;
 
       if (fileId) {
         try {
@@ -1267,18 +1339,23 @@ function insertImages() {
           if (permissions === DriveApp.Access.ANYONE ||
             permissions === DriveApp.Access.ANYONE_WITH_LINK) {
             const imgUrl = `https://drive.google.com/thumbnail?authuser=0&sz=w320&id=${fileId}`;
-            imgCell.setFormula(`=IMAGE("${imgUrl}")`);
+            imageValues[imageIndex][0] = `=IMAGE("${imgUrl}")`;
             successCount++;
           } else {
-            imgCell.setValue('Atur akses file menjadi "Anyone with the link" agar bisa menampilkan gambar');
+            imageValues[imageIndex][0] = 'Atur akses file menjadi "Anyone with the link" agar bisa menampilkan gambar';
             noAccessCount++;
           }
         } catch (error) {
-          imgCell.setValue(`Error: ${error.message}`);
+          imageValues[imageIndex][0] = safeSheetText(`Error: ${error.message}`);
           errorCount++;
         }
+      } else {
+        imageValues[imageIndex][0] = 'Error: ID file tidak valid';
+        errorCount++;
       }
     }
+
+    imageRange.setValues(imageValues);
 
     const duration = benchmark.end().totalTime.toFixed(2);
 
@@ -1286,7 +1363,7 @@ function insertImages() {
 
     ui.alert(
       'Proses selesai',
-      `Berhasil:  ${successCount}, Perlu sharing:  ${noAccessCount}, Error: ${errorCount}\nDurasi:  ${duration} detik. `,
+      `Berhasil:  ${successCount}, Perlu sharing:  ${noAccessCount}, Error: ${errorCount}\nDurasi:  ${duration} detik. `,
       ui.ButtonSet.OK
     );
 
@@ -1325,7 +1402,7 @@ function generateFileList() {
     const folderId = extractFileId(folderLink);
     if (!folderId) {
       logger.warn(`ID folder tidak ditemukan: ${folderLink}`);
-      ui.alert('Error', 'Link folder tidak valid.  Pastikan Anda memasukkan link yang benar.', ui.ButtonSet.OK);
+      ui.alert('Error', 'Link folder tidak valid.  Pastikan Anda memasukkan link yang benar.', ui.ButtonSet.OK);
       return;
     }
 
@@ -1363,7 +1440,7 @@ function generateFileList() {
 
     const confirm = ui.alert(
       'Konfirmasi',
-      `Akan mengekstrak daftar file dari folder "${folder.getName()}" dan semua subfoldernya.  Proses ini mungkin membutuhkan waktu untuk folder besar. Lanjutkan?`,
+      `Akan mengekstrak daftar file dari folder "${folder.getName()}" dan semua subfoldernya.  Proses ini mungkin membutuhkan waktu untuk folder besar. Lanjutkan?`,
       ui.ButtonSet.YES_NO
     );
 
@@ -1374,7 +1451,7 @@ function generateFileList() {
 
     const statusCol = resultCol + 3;
     const statusCell = sheet.getRange(1, statusCol);
-    statusCell.setValue("Memproses.. .");
+    statusCell.setValue("Memproses...");
 
     sheet.getRange(1, resultCol).setValue('Link');
     sheet.getRange(1, resultCol + 1).setValue('Judul File');
@@ -1383,7 +1460,7 @@ function generateFileList() {
     const benchmark = new Benchmark('Generate File List').start();
     const files = [];
 
-    logger.info(`Mulai proses folder:  ${folder.getName()}`);
+    logger.info(`Mulai proses folder:  ${folder.getName()}`);
     processFolder(folder, '', files, logger);
 
     benchmark.checkpoint(`Total file ditemukan: ${files.length}`);
@@ -1399,14 +1476,14 @@ function generateFileList() {
     const batchSize = 100;
     for (let i = 0; i < files.length; i += batchSize) {
       const chunk = files.slice(i, i + batchSize);
-      const data = chunk.map(file => [file.url, file.title, file.parentName]);
+      const data = chunk.map(file => [file.url, safeSheetText(file.title), safeSheetText(file.parentName)]);
       sheet.getRange(i + 2, resultCol, chunk.length, 3).setValues(data);
 
       statusCell.setValue(`Menulis ${Math.min(i + batchSize, files.length)}/${files.length} file... `);
 
       if ((i + batchSize) < files.length && benchmark.getElapsedTime() > MAX_EXECUTION_TIME - 60) {
         logger.warn(`Waktu eksekusi mendekati batas, menyimpan progres di baris ${i + chunk.length}`);
-        statusCell.setValue(`Timeout setelah ${i + chunk.length} file.  Jalankan lagi untuk melanjutkan. `);
+        statusCell.setValue(`Timeout setelah ${i + chunk.length} file.  Jalankan lagi untuk melanjutkan. `);
 
         const duration = benchmark.end().totalTime.toFixed(2);
 
@@ -1424,7 +1501,7 @@ function generateFileList() {
     const duration = benchmark.end().totalTime.toFixed(2);
 
     statusCell.setValue(`Selesai dalam ${duration} detik, total ${files.length} file`);
-    logger.info(`Proses selesai.  Durasi: ${duration} detik`);
+    logger.info(`Proses selesai.  Durasi: ${duration} detik`);
 
     ui.alert(
       'Proses selesai',
@@ -1457,9 +1534,10 @@ function processFolder(folder, parentName, files, logger) {
     parentName: parentName,
     depth: 0
   }];
+  let queueIndex = 0;
 
-  while (folderQueue.length > 0 && files.length < maxFiles) {
-    const current = folderQueue.shift();
+  while (queueIndex < folderQueue.length && files.length < maxFiles) {
+    const current = folderQueue[queueIndex++];
     const currentFolder = current.folder;
     const currentParent = current.parentName;
     const currentDepth = current.depth;
@@ -1558,7 +1636,7 @@ function shareFilesByEmail() {
 
       const responseLinkCol = ui.prompt(
         'Share File to Email',
-        'Kolom "Link" tidak ditemukan.  Masukkan nomor kolom untuk link file (misal: 2 untuk kolom B):',
+        'Kolom "Link" tidak ditemukan.  Masukkan nomor kolom untuk link file (misal: 2 untuk kolom B):',
         ui.ButtonSet.OK_CANCEL
       );
 
@@ -1588,7 +1666,7 @@ function shareFilesByEmail() {
         statusColIndex = Math.max(emailColIndex, linkColIndex) + 1;
         sheet.getRange(1, statusColIndex + 1).setValue("Status");
       }
-      logger.info(`Kolom yang ditemukan - Email:  ${emailColIndex + 1}, Link:  ${linkColIndex + 1}, Status: ${statusColIndex + 1}`);
+      logger.info(`Kolom yang ditemukan - Email:  ${emailColIndex + 1}, Link:  ${linkColIndex + 1}, Status: ${statusColIndex + 1}`);
     }
 
     processSharing(sheet, emailColIndex, linkColIndex, statusColIndex, logger);
@@ -1648,7 +1726,7 @@ function processSharing(sheet, emailColIndex, linkColIndex, statusColIndex, logg
 
   const response = ui.alert(
     "Konfirmasi",
-    `Akan membagikan akses ke ${filesToShare} file.  Lanjutkan?`,
+    `Akan membagikan akses ke ${filesToShare} file.  Lanjutkan?`,
     ui.ButtonSet.YES_NO
   );
 
@@ -1660,6 +1738,8 @@ function processSharing(sheet, emailColIndex, linkColIndex, statusColIndex, logg
   const benchmark = new Benchmark('Share Files by Email').start();
   let successCount = 0;
   let errorCount = 0;
+  const statusRange = sheet.getRange(2, statusColIndex + 1, lastRow - 1, 1);
+  const statusValues = statusRange.getValues();
 
   logger.info('Memulai proses berbagi file');
 
@@ -1677,17 +1757,19 @@ function processSharing(sheet, emailColIndex, linkColIndex, statusColIndex, logg
 
       file.addViewer(email);
 
-      sheet.getRange(row.rowIndex, statusColIndex + 1).setValue("TRUE");
+      statusValues[row.rowIndex - 2][0] = "TRUE";
       successCount++;
       logger.info(`Berhasil share file ke ${email}`);
 
       Utilities.sleep(200);
     } catch (error) {
-      sheet.getRange(row.rowIndex, statusColIndex + 1).setValue("Error:  " + error.message);
+      statusValues[row.rowIndex - 2][0] = safeSheetText("Error: " + error.message);
       errorCount++;
       logger.error(`Gagal share ke ${row.email}: ${error.message}`);
     }
   }
+
+  statusRange.setValues(statusValues);
 
   const duration = benchmark.end().totalTime.toFixed(2);
 
@@ -1726,7 +1808,7 @@ function createEmailTemplate() {
 
     ui.alert(
       'Template Email Dibuat',
-      'Sheet "Email Template" telah dibuat.  Silakan isi data email yang akan dikirim.',
+      'Sheet "Email Template" telah dibuat.  Silakan isi data email yang akan dikirim.',
       ui.ButtonSet.OK
     );
   } else {
@@ -1750,7 +1832,7 @@ function sendEmailBulk() {
     if (!sheet) {
       const response = ui.alert(
         'Email Template',
-        'Sheet "Email Template" belum dibuat.  Buat sekarang? ',
+        'Sheet "Email Template" belum dibuat.  Buat sekarang? ',
         ui.ButtonSet.YES_NO
       );
 
@@ -1774,14 +1856,14 @@ function sendEmailBulk() {
 
       const response = ui.alert(
         'Template Email Bulk',
-        `Kolom ${missingHeaders.join(', ')} tidak ditemukan.  Apakah Anda ingin membuat template? `,
+        `Kolom ${missingHeaders.join(', ')} tidak ditemukan.  Apakah Anda ingin membuat template? `,
         ui.ButtonSet.YES_NO
       );
 
       if (response === ui.Button.YES) {
         sheet.clear();
         sheet.getRange(1, 1, 1, 4).setValues([['Email', 'Subject', 'Body', 'Status']]);
-        sheet.getRange(2, 1, 1, 4).setValues([['contoh@email. com', 'Subjek email', 'Isi email', '']]);
+        sheet.getRange(2, 1, 1, 4).setValues([['contoh@email.com', 'Subjek email', 'Isi email', '']]);
         sheet.getRange(1, 1, 1, 4).setFontWeight('bold');
 
         logger.info('Template email dibuat');
@@ -1807,16 +1889,18 @@ function sendEmailBulk() {
     }
 
     const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+    const statusRange = sheet.getRange(2, statusColIndex + 1, lastRow - 1, 1);
+    const statusValues = statusRange.getValues();
 
     const dailyQuotaRemaining = MailApp.getRemainingDailyQuota();
     logger.info(`Sisa kuota email harian: ${dailyQuotaRemaining}`);
 
-    const unsentMessages = data.filter(row =>
-      row[emailColIndex] &&
-      validateEmail(row[emailColIndex].toString()) &&
-      row[statusColIndex] !== "Terkirim" &&
-      row[statusColIndex]?.toString().toLowerCase() !== "terkirim"
-    ).length;
+    const unsentMessages = data.filter(row => {
+      const statusText = row[statusColIndex] ? row[statusColIndex].toString().toLowerCase() : '';
+      return row[emailColIndex] &&
+        validateEmail(row[emailColIndex].toString()) &&
+        statusText !== "terkirim";
+    }).length;
 
     logger.info(`Jumlah email yang akan dikirim: ${unsentMessages}`);
 
@@ -1863,7 +1947,7 @@ function sendEmailBulk() {
 
       if (!validateEmail(emailAddress)) {
         logger.warn(`Email tidak valid pada baris ${i + 2}: ${emailAddress}`);
-        sheet.getRange(i + 2, statusColIndex + 1).setValue("Error: Email tidak valid");
+        statusValues[i][0] = "Error: Email tidak valid";
         errorCount++;
         continue;
       }
@@ -1879,37 +1963,43 @@ function sendEmailBulk() {
           const safeBody = sanitizeEmailBody(body);
 
           MailApp.sendEmail(emailAddress, subject, safeBody);
-          sheet.getRange(i + 2, statusColIndex + 1).setValue("Terkirim");
+          statusValues[i][0] = "Terkirim";
           logger.info(`Email berhasil dikirim ke: ${emailAddress}`);
           successCount++;
 
           Utilities.sleep(EMAIL_DELAY_MS);
         } catch (error) {
           logger.error(`Gagal mengirim email ke ${emailAddress}: ${error.message}`);
-          sheet.getRange(i + 2, statusColIndex + 1).setValue("Error: " + error.message);
+          statusValues[i][0] = safeSheetText("Error: " + error.message);
           errorCount++;
         }
       }
     }
 
+    statusRange.setValues(statusValues);
+
     const duration = benchmark.end().totalTime.toFixed(2);
 
     const summaryRow = sheet.getLastRow() + 2;
-    sheet.getRange(summaryRow, 1).setValue("=== Ringkasan ===");
-    sheet.getRange(summaryRow + 1, 1).setValue(`Email terkirim: ${successCount}`);
-    sheet.getRange(summaryRow + 2, 1).setValue(`Email gagal: ${errorCount}`);
-    sheet.getRange(summaryRow + 3, 1).setValue(`Waktu proses: ${duration} detik`);
-    sheet.getRange(summaryRow + 4, 1).setValue(`Diproses pada: ${formatDate(new Date())}`);
+    const summaryValues = [
+      ["=== Ringkasan ==="],
+      [`Email terkirim: ${successCount}`],
+      [`Email gagal: ${errorCount}`],
+      [`Waktu proses: ${duration} detik`],
+      [`Diproses pada: ${formatDate(new Date())}`]
+    ];
 
     if (quotaExhausted) {
-      sheet.getRange(summaryRow + 5, 1).setValue("PERINGATAN: Kuota email harian habis!");
+      summaryValues.push(["PERINGATAN: Kuota email harian habis!"]);
     }
 
-    logger.info(`Proses selesai.  Berhasil:  ${successCount}, Gagal: ${errorCount}, Durasi: ${duration} detik`);
+    sheet.getRange(summaryRow, 1, summaryValues.length, 1).setValues(summaryValues);
+
+    logger.info(`Proses selesai.  Berhasil:  ${successCount}, Gagal: ${errorCount}, Durasi: ${duration} detik`);
 
     let alertMessage = `Berhasil mengirim ${successCount} email, gagal ${errorCount} email dalam ${duration} detik.`;
     if (quotaExhausted) {
-      alertMessage += "\n\nPERINGATAN:  Kuota email harian habis.  Sisa email akan dikirim besok.";
+      alertMessage += "\n\nPERINGATAN:  Kuota email harian habis.  Sisa email akan dikirim besok.";
     }
 
     ui.alert("Proses selesai", alertMessage, ui.ButtonSet.OK);
@@ -1931,7 +2021,7 @@ function sanitizeEmailBody(body) {
   if (!body) return '';
 
   return body.toString()
-    .replace(/<script\b[^<]*(?:(?! <\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '')
     .replace(/javascript:/gi, '');
 }
@@ -1947,7 +2037,7 @@ function formatDate(date) {
   if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
     return "Invalid Date";
   }
-  return Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm: ss");
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
 }
 
 /**
@@ -1967,9 +2057,9 @@ function sanitizeFileName(filename) {
 }
 
 /**
- * Ekstraksi ID dari URL atau mengembalikan string asli jika itu adalah ID. 
+ * Ekstraksi ID dari URL atau mengembalikan string asli jika itu adalah ID.
  *
- * @param {string} idOrUrl - ID atau URL untuk diekstraksi. 
+ * @param {string} idOrUrl - ID atau URL untuk diekstraksi.
  * @returns {string} - ID yang diekstraksi atau string kosong jika tidak valid.
  */
 function extractFileId(idOrUrl) {
@@ -1996,6 +2086,59 @@ function extractFileId(idOrUrl) {
 }
 
 /**
+ * Membatasi angka ke rentang yang aman.
+ *
+ * @param {number} value - Nilai angka.
+ * @param {number} min - Batas bawah.
+ * @param {number} max - Batas atas.
+ * @returns {number} Nilai dalam rentang.
+ */
+function clampNumber(value, min, max) {
+  const numericValue = parseInt(value, 10);
+  if (isNaN(numericValue)) return min;
+  return Math.min(Math.max(numericValue, min), max);
+}
+
+/**
+ * Menormalisasi tipe template.
+ *
+ * @param {string} templateType - Tipe template dari UI/state.
+ * @returns {string} 'slides' atau 'docs'.
+ */
+function normalizeTemplateType(templateType) {
+  return templateType === 'docs' ? 'docs' : 'slides';
+}
+
+/**
+ * Menormalisasi pengaturan PDF agar semua entry point memakai validasi yang sama.
+ *
+ * @param {Object} settings - Pengaturan mentah dari sheet atau dialog.
+ * @returns {Object} Pengaturan yang sudah divalidasi.
+ */
+function normalizeTemplateSettings(settings) {
+  const source = settings || {};
+  return {
+    templateId: source.templateId ? source.templateId.toString().trim() : '',
+    folderId: source.folderId ? source.folderId.toString().trim() : '',
+    dataRange: clampNumber(validateNumeric(source.dataRange, DEFAULT_DATA_COLUMNS), 1, MAX_DATA_COLUMNS),
+    pdfColumn: clampNumber(validateNumeric(source.pdfColumn, DEFAULT_PDF_COLUMN), 1, MAX_RESULT_COLUMN),
+    titleSuffix: source.titleSuffix ? source.titleSuffix.toString().trim() : ''
+  };
+}
+
+/**
+ * Mencegah nilai eksternal menjadi formula saat ditulis ke spreadsheet.
+ *
+ * @param {*} value - Nilai yang akan ditulis.
+ * @returns {*} Nilai aman untuk setValues/setValue.
+ */
+function safeSheetText(value) {
+  if (value === null || value === undefined) return '';
+  const text = value.toString();
+  return /^[=+\-@]/.test(text) ? `'${text}` : text;
+}
+
+/**
  * Fungsi untuk memvalidasi input numerik
  *
  * @param {string|number} input - Input yang akan divalidasi
@@ -2007,7 +2150,12 @@ function validateNumeric(input, defaultValue = 1) {
     return defaultValue;
   }
 
-  const value = parseInt(input, 10);
+  const inputText = input.toString().trim();
+  if (!/^\d+$/.test(inputText)) {
+    return defaultValue;
+  }
+
+  const value = parseInt(inputText, 10);
   return isNaN(value) || value <= 0 ? defaultValue : value;
 }
 
@@ -2048,7 +2196,7 @@ function viewLogs() {
 
   const response = ui.alert(
     'Logs',
-    'Log berhasil ditampilkan.  Apakah Anda ingin menghapus log? ',
+    'Log berhasil ditampilkan.  Apakah Anda ingin menghapus log? ',
     ui.ButtonSet.YES_NO
   );
 
@@ -2092,30 +2240,35 @@ function logToSheet(logger) {
   const lastRow = logSheet.getLastRow();
   const logData = logs.map(log => [
     log.timestamp,
-    log.module,
+    safeSheetText(log.module),
     log.level,
-    log.message,
-    log.data || ''
+    safeSheetText(log.message),
+    safeSheetText(log.data || '')
   ]);
 
   logSheet.getRange(lastRow + 1, 1, logData.length, 5).setValues(logData);
 
+  const levelBackgrounds = [];
   for (let i = 0; i < logData.length; i++) {
-    const cell = logSheet.getRange(lastRow + 1 + i, 3);
     const level = logData[i][2];
 
     switch (level) {
       case 'ERROR':
-        cell.setBackground('#f4cccc');
+        levelBackgrounds.push(['#f4cccc']);
         break;
       case 'WARNING':
-        cell.setBackground('#fff2cc');
+        levelBackgrounds.push(['#fff2cc']);
         break;
       case 'INFO':
-        cell.setBackground('#d9ead3');
+        levelBackgrounds.push(['#d9ead3']);
+        break;
+      default:
+        levelBackgrounds.push([null]);
         break;
     }
   }
+
+  logSheet.getRange(lastRow + 1, 3, levelBackgrounds.length, 1).setBackgrounds(levelBackgrounds);
 }
 
 //==============================================================================
@@ -2152,7 +2305,25 @@ class AppState {
       valueToStore = value.toString();
     }
 
-    this.props.setProperty(fullKey, valueToStore);
+    this.remove(key);
+
+    if (valueToStore.length <= PROPERTY_CHUNK_SIZE) {
+      this.props.setProperty(fullKey, valueToStore);
+      return;
+    }
+
+    const chunkCount = Math.ceil(valueToStore.length / PROPERTY_CHUNK_SIZE);
+    const chunkProperties = {};
+
+    for (let i = 0; i < chunkCount; i++) {
+      chunkProperties[`${fullKey}.__chunk.${i}`] = valueToStore.substring(
+        i * PROPERTY_CHUNK_SIZE,
+        (i + 1) * PROPERTY_CHUNK_SIZE
+      );
+    }
+
+    chunkProperties[`${fullKey}.__chunks`] = chunkCount.toString();
+    this.props.setProperties(chunkProperties);
   }
 
   /**
@@ -2164,7 +2335,26 @@ class AppState {
    */
   get(key, defaultValue = null) {
     const fullKey = `${this.namespace}.${key}`;
-    const value = this.props.getProperty(fullKey);
+    let value = this.props.getProperty(fullKey);
+
+    if (value === null || value === undefined) {
+      const chunkCountRaw = this.props.getProperty(`${fullKey}.__chunks`);
+      const chunkCount = parseInt(chunkCountRaw, 10);
+
+      if (!isNaN(chunkCount) && chunkCount > 0) {
+        const chunks = [];
+
+        for (let i = 0; i < chunkCount; i++) {
+          const chunk = this.props.getProperty(`${fullKey}.__chunk.${i}`);
+          if (chunk === null || chunk === undefined) {
+            return defaultValue;
+          }
+          chunks.push(chunk);
+        }
+
+        value = chunks.join('');
+      }
+    }
 
     if (value === null || value === undefined || value === '') {
       return defaultValue;
@@ -2199,7 +2389,17 @@ class AppState {
    */
   remove(key) {
     const fullKey = `${this.namespace}.${key}`;
+    const chunkCountRaw = this.props.getProperty(`${fullKey}.__chunks`);
+    const chunkCount = parseInt(chunkCountRaw, 10);
+
     this.props.deleteProperty(fullKey);
+
+    if (!isNaN(chunkCount) && chunkCount > 0) {
+      for (let i = 0; i < chunkCount; i++) {
+        this.props.deleteProperty(`${fullKey}.__chunk.${i}`);
+      }
+      this.props.deleteProperty(`${fullKey}.__chunks`);
+    }
   }
 
   /**
@@ -2257,7 +2457,7 @@ class ErrorHandler {
           const ui = SpreadsheetApp.getUi();
           ui.alert(
             'Error',
-            `Terjadi kesalahan saat ${config.context.toLowerCase()}:  ${error.message}`,
+            `Terjadi kesalahan saat ${config.context.toLowerCase()}:  ${error.message}`,
             ui.ButtonSet.OK
           );
         } catch (uiError) {
@@ -2410,7 +2610,7 @@ class Benchmark {
       sinceLast: sinceLast
     });
 
-    console.log(`[${this.name}] ${label}:  ${elapsed.toFixed(2)}s (+${sinceLast.toFixed(2)}s)`);
+    console.log(`[${this.name}] ${label}:  ${elapsed.toFixed(2)}s (+${sinceLast.toFixed(2)}s)`);
 
     return this;
   }
@@ -2469,6 +2669,29 @@ function withRetry(operation, maxRetries = 3, delayMs = 1000) {
 }
 
 /**
+ * Menjalankan operasi dengan document lock agar proses yang menulis ke sheet tidak bertabrakan.
+ *
+ * @param {Function} operation - Operasi yang akan dijalankan.
+ * @param {Object} options - Opsi lock.
+ * @returns {*} Hasil operasi.
+ */
+function withDocumentLock(operation, options = {}) {
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  const timeoutMs = options.timeoutMs || LOCK_WAIT_MS;
+  const context = options.context || 'operasi';
+
+  if (!lock.tryLock(timeoutMs)) {
+    throw new Error(`Masih ada ${context} yang sedang berjalan. Coba lagi setelah proses tersebut selesai.`);
+  }
+
+  try {
+    return operation();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
  * Fungsi untuk mengoptimalkan operasi batch pada DriveApp
  *
  * @param {Array} operations - Array operasi yang akan dilakukan
@@ -2514,7 +2737,7 @@ function batchProcessDriveOperations(operations, batchSize = MAX_BATCH_SIZE) {
           successCount++;
         }
       } catch (error) {
-        console.error(`Error pada operasi ${startIdx + index + 1}:  ${error.message}`);
+        console.error(`Error pada operasi ${startIdx + index + 1}:  ${error.message}`);
         failureCount++;
       }
     });
@@ -2574,9 +2797,44 @@ function deleteTriggersByFunction(functionName) {
 }
 
 /**
- * Hapus semua trigger yang ada
+ * Hapus trigger yang dibuat aplikasi ini.
+ *
+ * @returns {number} Jumlah trigger yang dihapus.
+ */
+function deleteApplicationTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  let deletedCount = 0;
+
+  triggers.forEach(trigger => {
+    if (APP_MANAGED_TRIGGER_FUNCTIONS.indexOf(trigger.getHandlerFunction()) !== -1) {
+      ScriptApp.deleteTrigger(trigger);
+      deletedCount++;
+    }
+  });
+
+  console.log(`Deleted ${deletedCount} application triggers`);
+
+  const appState = new AppState('triggers');
+  appState.clear();
+
+  return deletedCount;
+}
+
+/**
+ * Hapus semua trigger yang ada setelah konfirmasi pengguna.
  */
 function deleteAllTriggers() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    'Hapus Semua Trigger',
+    'Ini akan menghapus semua trigger installable pada project Apps Script ini. Lanjutkan?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (response !== ui.Button.YES) {
+    return;
+  }
+
   const triggers = ScriptApp.getProjectTriggers();
 
   triggers.forEach(trigger => {
@@ -2587,6 +2845,8 @@ function deleteAllTriggers() {
 
   const appState = new AppState('triggers');
   appState.clear();
+
+  ui.alert('Trigger dihapus', `${triggers.length} trigger telah dihapus.`, ui.ButtonSet.OK);
 }
 
 /**
@@ -2613,7 +2873,7 @@ function getProgressUpdate() {
     return {
       current: 0,
       total: 1,
-      message: 'Memulai.. .',
+      message: 'Memulai...',
       complete: false
     };
   }
@@ -2631,13 +2891,20 @@ function getProgressUpdate() {
 }
 
 /**
- * Memproses satu batch (satu file PDF) dan mengembalikan status progres. 
+ * Memproses satu batch (satu file PDF) dan mengembalikan status progres.
  * Fungsi ini dirancang untuk dipanggil berulang kali dari sisi klien (dialog).
  *
  * @param {number} index - Index item yang akan diproses (berdasarkan filtered data).
- * @returns {Object} - Objek status progres. 
+ * @returns {Object} - Objek status progres.
  */
 function processPDFBatch(index) {
+  return withDocumentLock(
+    () => processPDFBatchInternal(index),
+    { timeoutMs: LOCK_WAIT_MS, context: 'batch PDF' }
+  );
+}
+
+function processPDFBatchInternal(index) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   const logger = new Logger('processPDFBatch');
   const appState = new AppState('pdfGeneration');
@@ -2649,7 +2916,7 @@ function processPDFBatch(index) {
     return {
       current: index,
       total: appState.get('totalItems', 0),
-      message: 'Error:  Konfigurasi tidak valid.  Pastikan Template ID dan Folder ID sudah diisi.',
+      message: 'Error:  Konfigurasi tidak valid.  Pastikan Template ID dan Folder ID sudah diisi.',
       complete: false,
       error: 'Konfigurasi tidak valid'
     };
@@ -2658,8 +2925,8 @@ function processPDFBatch(index) {
   let templateId, folderId, folder;
 
   try {
-    templateId = extractFileId(settings.templateId);
-    folderId = extractFileId(settings.folderId);
+    templateId = appState.get('templateId', '') || extractFileId(settings.templateId);
+    folderId = appState.get('folderId', '') || extractFileId(settings.folderId);
 
     if (!templateId || !folderId) {
       throw new Error('Tidak dapat mengekstrak ID dari Template atau Folder');
@@ -2681,7 +2948,7 @@ function processPDFBatch(index) {
   const dataRange = settings.dataRange;
   const pdfColumn = settings.pdfColumn;
   const ketJudul = settings.titleSuffix;
-  const templateType = appState.get('templateType', 'slides');
+  const templateType = normalizeTemplateType(appState.get('templateType', 'slides'));
   const totalItems = appState.get('totalItems', 0);
 
   const indexMapping = appState.get('indexMapping', []);
@@ -2689,6 +2956,7 @@ function processPDFBatch(index) {
   if (index < 0 || index >= totalItems) {
     logger.info(`Index ${index} di luar range (total: ${totalItems}), proses selesai`);
     appState.clear();
+    deleteApplicationTriggers();
     return {
       current: totalItems,
       total: totalItems,
@@ -2710,12 +2978,12 @@ function processPDFBatch(index) {
     };
   }
 
-  const actualSheetRow = 3 + actualRowIndex;
+  const actualSheetRow = DATA_START_ROW + actualRowIndex;
 
   try {
-    const row = sheet.getRange(actualSheetRow, 1, 1, dataRange).getValues()[0];
+    const row = sheet.getRange(actualSheetRow, 1, 1, dataRange).getDisplayValues()[0];
     const pdfUrlCell = sheet.getRange(actualSheetRow, pdfColumn);
-    const existingPdfUrl = pdfUrlCell.getValue();
+    const existingPdfUrl = pdfUrlCell.getDisplayValue();
 
     let lastPdfTitle = '';
     let wasProcessed = false;
@@ -2733,7 +3001,7 @@ function processPDFBatch(index) {
         lastPdfTitle = generatePDFfromDocs(templateId, row, ketJudul, folder, pdfUrlCell);
       }
       wasProcessed = true;
-      logger.info(`Berhasil memproses baris ${actualSheetRow}:  ${lastPdfTitle}`);
+      logger.info(`Berhasil memproses baris ${actualSheetRow}:  ${lastPdfTitle}`);
     }
 
     if (wasProcessed) {
@@ -2746,7 +3014,7 @@ function processPDFBatch(index) {
     const progressData = {
       current: index + 1,
       total: totalItems,
-      message: isComplete ? `Selesai!  ${lastPdfTitle}` : `Memproses: ${lastPdfTitle}`,
+      message: isComplete ? `Selesai!  ${lastPdfTitle}` : `Memproses: ${lastPdfTitle}`,
       complete: isComplete,
       error: null
     };
@@ -2760,10 +3028,10 @@ function processPDFBatch(index) {
     if (isComplete) {
       const processedCount = appState.get('processedCount', 0);
       appState.clear();
-      deleteAllTriggers();
-      logger.info(`Semua proses batch selesai.  Total diproses: ${processedCount}`);
+      deleteApplicationTriggers();
+      logger.info(`Semua proses batch selesai.  Total diproses: ${processedCount}`);
 
-      sheet.getRange(2, 1, 1, sheet.getMaxColumns()).setBackground('#b7e1cd');
+      sheet.getRange(2, 1, 1, Math.max(sheet.getLastColumn(), CONFIG_COLUMNS)).setBackground('#b7e1cd');
     }
 
     logToSheet(logger);
@@ -2774,16 +3042,22 @@ function processPDFBatch(index) {
     logToSheet(logger);
 
     try {
-      sheet.getRange(actualSheetRow, pdfColumn).setValue(`Error: ${e.message}`);
+      sheet.getRange(actualSheetRow, pdfColumn).setValue(safeSheetText(`Error: ${e.message}`));
     } catch (writeError) {
       logger.error(`Gagal menulis error ke cell: ${writeError.message}`);
+    }
+
+    const isComplete = (index + 1) >= totalItems;
+    if (isComplete) {
+      appState.clear();
+      deleteApplicationTriggers();
     }
 
     return {
       current: index + 1,
       total: totalItems,
-      message: `Error pada baris ${actualSheetRow}: ${e.message}.  Melanjutkan... `,
-      complete: (index + 1) >= totalItems,
+      message: `Error pada baris ${actualSheetRow}: ${e.message}.  Melanjutkan... `,
+      complete: isComplete,
       error: e.message,
       continueOnError: true
     };
@@ -2817,7 +3091,7 @@ function getProcessStatus() {
 function cancelProcess() {
   const logger = new Logger('cancelProcess');
   logger.info('Membatalkan proses yang sedang berjalan');
-  deleteAllTriggers();
+  deleteApplicationTriggers();
 
   const appState = new AppState('pdfGeneration');
   appState.clear();

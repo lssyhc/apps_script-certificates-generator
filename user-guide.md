@@ -93,13 +93,13 @@
 3. Klik **File → Save** (atau Ctrl+S)
 4. Beri nama project: **"GDocs Automator"**
 
-### STEP 4: Buat File dialog. html
+### STEP 4: Buat File dialog.html
 
 1. Di Apps Script editor, klik tanda **"+"** di sebelah "Files"
 2. Pilih **"HTML"**
-3. Beri nama: **"dialog"** (tanpa . html)
+3. Beri nama: **"dialog"** (tanpa `.html`)
 4. Salin **SELURUH** isi file `dialog.html` yang sudah diperbaiki
-5. Paste ke file dialog. html
+5. Paste ke file `dialog.html`
 6. Save (Ctrl+S)
 
 ### STEP 5: Otorisasi Pertama Kali
@@ -180,7 +180,7 @@ GDocs Automator
 | | Send Email Bulk | Kirim email massal |
 | | Template Email | Buat template untuk bulk email |
 | **Admin** | View Logs | Lihat log aktivitas |
-| | Hapus Semua Trigger | Hapus scheduled tasks |
+| | Hapus Semua Trigger | Hapus trigger installable setelah konfirmasi |
 | | Reset State | Reset semua state aplikasi |
 | | Tentang Aplikasi | Info versi aplikasi |
 
@@ -868,7 +868,7 @@ Setelah melihat log, akan muncul pertanyaan:
 
 ## 7.2 Hapus Semua Trigger
 
-**Fungsi:** Menghapus semua scheduled tasks yang mungkin tertinggal.
+**Fungsi:** Menghapus semua trigger installable pada project Apps Script ini.
 
 **Kapan Menggunakan:**
 - Jika proses terhenti secara tidak normal
@@ -882,7 +882,7 @@ Menu → GDocs Automator → Admin → Hapus Semua Trigger
 
 **Hasil:**
 
-Semua trigger yang terdaftar akan dihapus.  Tidak ada konfirmasi - langsung dihapus. 
+Aplikasi akan meminta konfirmasi terlebih dahulu. Jika dikonfirmasi, semua trigger installable pada project akan dihapus.
 
 ## 7.3 Reset State
 
@@ -900,7 +900,7 @@ Semua trigger yang terdaftar akan dihapus.  Tidak ada konfirmasi - langsung dih
 3. Klik: **Yes**
 
 **Yang Akan Dihapus:**
-- Semua trigger
+- Trigger lanjutan yang dibuat aplikasi
 - Semua cache (progress, index, dll.)
 - Semua state tersimpan (current index, processed count, dll.)
 
@@ -1050,6 +1050,8 @@ Hasil:
 
 | Limitasi | Nilai | Catatan |
 |----------|-------|---------|
+| Max kolom data PDF | 50 kolom | Disesuaikan dengan dialog generator |
+| Max kolom hasil PDF | Kolom ke-100 | Untuk mencegah input kolom yang tidak sengaja terlalu besar |
 | Kedalaman folder | 10 level | Untuk ekstrak list file |
 | Max file per ekstrak | 5000 file | Untuk ekstrak list file |
 | Max backup | 5 backup | Yang lama dihapus otomatis |
@@ -1490,7 +1492,15 @@ Contoh:
 - [ ] Tidak ada konten yang bisa dianggap spam
 - [ ] Pastikan tidak mengirim email duplikat
 
-## 15.5 Recovery dari Error
+## 15.5 Praktik Teknis yang Diterapkan
+
+- Operasi spreadsheet memakai batch read/write (`getValues`/`setValues`) untuk mengurangi panggilan layanan.
+- Proses PDF memakai lock agar retry atau dialog ganda tidak membuat duplikat saat server masih memproses.
+- Proses lanjutan hanya memakai trigger aplikasi, sedangkan menu "Hapus Semua Trigger" tetap meminta konfirmasi.
+- Nilai dari Drive/log yang ditulis ke sheet diamankan agar tidak berubah menjadi formula.
+- Data PDF memakai tampilan sel (`getDisplayValues`) sehingga tanggal/angka mengikuti format spreadsheet.
+
+## 15.6 Recovery dari Error
 
 **Skenario 1: Proses berhenti, sebagian sudah selesai**
 1.  JANGAN panik
@@ -1509,7 +1519,7 @@ Contoh:
 2. Admin → Reset State
 3. Jalankan proses dari awal
 
-## 15.6 Security Best Practices
+## 15.7 Security Best Practices
 
 | Praktik | Deskripsi |
 |---------|-----------|
